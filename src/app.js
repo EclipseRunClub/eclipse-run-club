@@ -5,8 +5,16 @@
 const SUPABASE_URL = 'https://gzjaibvfeqchppqgtgrp.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6amFpYnZmZXFjaHBwcWd0Z3JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1Mjc2ODcsImV4cCI6MjA5MjEwMzY4N30.7Yxmso5BQ2uQ4w89PnHGt8JLRkhu6AMpWCBdZ_bj5ig';
 
-const { createClient } = supabase;
-const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Wait for supabase library to be available
+let db;
+function initSupabase() {
+  if (typeof supabase === 'undefined' || !supabase.createClient) {
+    setTimeout(initSupabase, 100);
+    return;
+  }
+  db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  startApp();
+}
 
 // --- STATE ---
 let currentUser = null;
@@ -16,11 +24,17 @@ let previousScreen = 'home';
 let authMode = 'signin';
 
 // --- INIT ---
-document.addEventListener('DOMContentLoaded', async () => {
-  const { data: { session } } = await db.auth.getSession();
-  if (session) {
-    currentUser = session.user;
-    await loadProfile();
+window.addEventListener('load', initSupabase);
+
+async function startApp() {
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    if (session) {
+      currentUser = session.user;
+      await loadProfile();
+    }
+  } catch(e) {
+    console.log('Session check failed:', e);
   }
   await renderHome();
   await renderEvents();
@@ -29,23 +43,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderProfile();
   renderNotifications();
   if (!currentUser) setTimeout(() => openAuthModal(), 800);
-});
 
-// --- AUTH STATE CHANGE ---
-db.auth.onAuthStateChange(async (event, session) => {
-  if (event === 'SIGNED_IN' && session) {
-    currentUser = session.user;
-    await loadProfile();
-    renderProfile();
-    await renderHome();
-    await renderEvents();
-    await renderSpotlight();
-  } else if (event === 'SIGNED_OUT') {
-    currentUser = null;
-    currentProfile = null;
-    renderProfile();
-  }
-});
+  // --- AUTH STATE CHANGE ---
+  db.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session) {
+      currentUser = session.user;
+      await loadProfile();
+      renderProfile();
+      await renderHome();
+      await renderEvents();
+      await renderSpotlight();
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      currentProfile = null;
+      renderProfile();
+    }
+  });
+}
 
 // --- LOAD PROFILE ---
 async function loadProfile() {
