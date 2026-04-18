@@ -1,62 +1,74 @@
-// =====================
-// ECLIPSE RUN CLUB APP
-// =====================
+// ================================
+// ECLIPSE RUN CLUB — Supabase App
+// ================================
 
-// --- DATA STORE ---
-// In a real app this would connect to a database.
-// For now we use localStorage so data persists between visits.
+const SUPABASE_URL = 'https://gzjaibvfeqchppqgtgrp.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6amFpYnZmZXFjaHBwcWd0Z3JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1Mjc2ODcsImV4cCI6MjA5MjEwMzY4N30.7Yxmso5BQ2uQ4w89PnHGt8JLRkhu6AMpWCBdZ_bj5ig';
 
-const DB = {
-  get: (key) => { try { return JSON.parse(localStorage.getItem('erc_' + key)); } catch { return null; } },
-  set: (key, val) => localStorage.setItem('erc_' + key, JSON.stringify(val)),
-};
-
-// --- SEED DATA ---
-const DEFAULT_EVENTS = [
-  { id: 1, title: "Victoria Park 5K", date: "2026-04-26", time: "7:00 AM", location: "Victoria Park, E9", distance: "5K · All paces", going: 24 },
-  { id: 2, title: "Regents Canal 10K", date: "2026-05-03", time: "8:00 AM", location: "Mile End, E3", distance: "10K · Intermediate", going: 17 },
-  { id: 3, title: "Night Run — Eclipse Special", date: "2026-05-10", time: "9:00 PM", location: "Hackney Marshes", distance: "5K · All paces", going: 41 },
-  { id: 4, title: "Hampstead Heath Trail Run", date: "2026-05-17", time: "8:30 AM", location: "Hampstead Heath, NW3", distance: "8K · All paces", going: 29 },
-  { id: 5, title: "Eclipse Summer 10K", date: "2026-06-07", time: "7:30 AM", location: "Victoria Park, E9", distance: "10K · All paces", going: 55 },
-];
-
-const DEFAULT_SPOTLIGHT = [
-  { id: 1, name: "Sarah R.", initials: "SR", type: "pb", badge: "New PB", value: "24:38", label: "New Personal Best · 5K", icon: "⚡", text: "Just smashed my 5K personal best at this morning's run! Couldn't have done it without you all pushing me every week. Eclipse family 🖤", cheers: 14, comments: 3, time: "2 hours ago" },
-  { id: 2, name: "Dan M.", initials: "DM", type: "race", badge: "1st Race", value: "58:12", label: "Race Completion · 10K", icon: "🏅", text: "Completed my first ever official 10K race. 14 months ago I couldn't run to the end of the street. Thank you Eclipse!", cheers: 31, comments: 8, time: "Yesterday" },
-  { id: 3, name: "Aisha K.", initials: "AK", type: "milestone", badge: "Milestone", value: "100 KM", label: "Distance Milestone", icon: "🌑", text: "Hit 100km total with Eclipse this month. Never thought I'd be a runner but here we are!", cheers: 22, comments: 5, time: "3 days ago" },
-];
-
-const DEFAULT_NOTIFICATIONS = [
-  { id: 1, icon: "🏃", text: "New event added: Eclipse Summer 10K on June 7th", time: "Just now" },
-  { id: 2, icon: "🎉", text: "Sarah R. just posted a new achievement — go cheer her on!", time: "2 hours ago" },
-  { id: 3, icon: "📅", text: "Reminder: Victoria Park 5K is tomorrow at 7:00 AM", time: "Yesterday" },
-];
-
-// Initialise data if not set
-if (!DB.get('events')) DB.set('events', DEFAULT_EVENTS);
-if (!DB.get('spotlight')) DB.set('spotlight', DEFAULT_SPOTLIGHT);
-if (!DB.get('notifications')) DB.set('notifications', DEFAULT_NOTIFICATIONS);
-if (!DB.get('cheered')) DB.set('cheered', []);
-if (!DB.get('rsvp')) DB.set('rsvp', []);
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // --- STATE ---
-let currentUser = DB.get('user') || null;
+let currentUser = null;
+let currentProfile = null;
+let nextEvent = null;
 let previousScreen = 'home';
 let authMode = 'signin';
 
 // --- INIT ---
-document.addEventListener('DOMContentLoaded', () => {
-  renderHome();
-  renderEvents();
-  renderSpotlight();
+document.addEventListener('DOMContentLoaded', async () => {
+  const { data: { session } } = await db.auth.getSession();
+  if (session) {
+    currentUser = session.user;
+    await loadProfile();
+  }
+  await renderHome();
+  await renderEvents();
+  await renderSpotlight();
   renderChat();
   renderProfile();
   renderNotifications();
-  updateNotifDot();
-  if (!currentUser) {
-    setTimeout(() => openAuthModal(), 800);
+  if (!currentUser) setTimeout(() => openAuthModal(), 800);
+});
+
+// --- AUTH STATE CHANGE ---
+db.auth.onAuthStateChange(async (event, session) => {
+  if (event === 'SIGNED_IN' && session) {
+    currentUser = session.user;
+    await loadProfile();
+    renderProfile();
+    await renderHome();
+    await renderEvents();
+    await renderSpotlight();
+  } else if (event === 'SIGNED_OUT') {
+    currentUser = null;
+    currentProfile = null;
+    renderProfile();
   }
 });
+
+// --- LOAD PROFILE ---
+async function loadProfile() {
+  if (!currentUser) return;
+  const { data } = await db.from('profiles').select('*').eq('id', currentUser.id).single();
+  if (data) {
+    currentProfile = data;
+  } else {
+    // Create profile if doesn't exist
+    const name = currentUser.user_metadata?.name || currentUser.email.split('@')[0];
+    const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    const { data: newProfile } = await db.from('profiles').insert({
+      id: currentUser.id,
+      name,
+      email: currentUser.email,
+      is_admin: false,
+      runs: 0,
+      km: 0,
+      events_attended: 0
+    }).select().single();
+    currentProfile = newProfile;
+  }
+}
 
 // --- SCREEN NAVIGATION ---
 function showScreen(name) {
@@ -67,7 +79,6 @@ function showScreen(name) {
   if (el) el.classList.add('active');
   const nav = document.getElementById('nav-' + name);
   if (nav) nav.classList.add('active');
-  if (name === 'notifications') markNotifsRead();
 }
 
 function getCurrentScreen() {
@@ -75,62 +86,68 @@ function getCurrentScreen() {
   return active ? active.id.replace('screen-', '') : 'home';
 }
 
-function goBack() {
-  showScreen(previousScreen || 'home');
-}
+function goBack() { showScreen(previousScreen || 'home'); }
 
 // --- HOME ---
-function renderHome() {
-  const events = DB.get('events') || [];
-  const next = events[0];
-  if (next) {
-    const d = new Date(next.date);
-    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    document.getElementById('next-event-date').textContent =
-      `${days[d.getDay()]} · ${d.getDate()} ${months[d.getMonth()]} · ${next.time}`;
-    document.getElementById('next-event-title').textContent = next.title;
-    document.getElementById('next-event-location').querySelector('span').textContent = next.location;
-    document.getElementById('next-event-distance').querySelector('span').textContent = next.distance;
-    document.getElementById('stat-going').textContent = next.going;
-    document.getElementById('stat-runs').textContent = next.distance.split(' ')[0];
+async function renderHome() {
+  const { data: events } = await db.from('events').select('*').order('date', { ascending: true }).limit(3);
+  if (!events || events.length === 0) {
+    document.getElementById('next-event-date').textContent = 'No upcoming events';
+    document.getElementById('next-event-title').textContent = 'Check back soon!';
+    return;
+  }
+  nextEvent = events[0];
+  const d = new Date(nextEvent.date);
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  document.getElementById('next-event-date').textContent = `${days[d.getDay()]} · ${d.getDate()} ${months[d.getMonth()]} · ${nextEvent.time}`;
+  document.getElementById('next-event-title').textContent = nextEvent.title;
+  document.getElementById('next-event-location').textContent = nextEvent.location;
+  document.getElementById('next-event-distance').textContent = nextEvent.distance;
+  document.getElementById('stat-going').textContent = nextEvent.going;
+  document.getElementById('stat-distance').textContent = nextEvent.distance.split(' ')[0];
+
+  // Member count
+  const { count } = await db.from('profiles').select('*', { count: 'exact', head: true });
+  document.getElementById('stat-members').textContent = count || 0;
+
+  // Check if current user RSVPd
+  if (currentUser) {
+    const { data: rsvp } = await db.from('rsvps').select('id').eq('user_id', currentUser.id).eq('event_id', nextEvent.id).single();
+    const btn = document.getElementById('rsvp-btn');
+    if (rsvp) {
+      btn.textContent = "✓ You're Going";
+      btn.classList.add('going');
+    } else {
+      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> I\'m Going';
+      btn.classList.remove('going');
+    }
   }
 
-  const rsvps = DB.get('rsvp') || [];
-  const btn = document.getElementById('rsvp-btn');
-  if (next && rsvps.includes(next.id)) {
-    btn.textContent = '✓ You\'re Going';
-    btn.classList.add('going');
-  }
-
-  const list = document.getElementById('events-list');
-  list.innerHTML = events.slice(0, 3).map(e => eventCardHTML(e)).join('');
+  // Events preview
+  const list = document.getElementById('events-preview');
+  list.innerHTML = events.map(e => eventCardHTML(e)).join('');
 }
 
-function toggleRSVP() {
+async function toggleRSVP() {
   if (!requireAuth()) return;
-  const events = DB.get('events') || [];
-  const next = events[0];
-  if (!next) return;
-  const rsvps = DB.get('rsvp') || [];
+  if (!nextEvent) return;
   const btn = document.getElementById('rsvp-btn');
-  const statGoing = document.getElementById('stat-going');
-  if (rsvps.includes(next.id)) {
-    DB.set('rsvp', rsvps.filter(r => r !== next.id));
-    next.going--;
+  const { data: existing } = await db.from('rsvps').select('id').eq('user_id', currentUser.id).eq('event_id', nextEvent.id).single();
+  if (existing) {
+    await db.from('rsvps').delete().eq('id', existing.id);
+    await db.from('events').update({ going: nextEvent.going - 1 }).eq('id', nextEvent.id);
+    nextEvent.going--;
     btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> I\'m Going';
     btn.classList.remove('going');
   } else {
-    rsvps.push(next.id);
-    DB.set('rsvp', rsvps);
-    next.going++;
+    await db.from('rsvps').insert({ user_id: currentUser.id, event_id: nextEvent.id });
+    await db.from('events').update({ going: nextEvent.going + 1 }).eq('id', nextEvent.id);
+    nextEvent.going++;
     btn.textContent = "✓ You're Going";
     btn.classList.add('going');
   }
-  events[0] = next;
-  DB.set('events', events);
-  statGoing.textContent = next.going;
-  renderEvents();
+  document.getElementById('stat-going').textContent = nextEvent.going;
 }
 
 // --- EVENTS ---
@@ -151,32 +168,68 @@ function eventCardHTML(e) {
     </div>`;
 }
 
-function renderEvents() {
-  const events = DB.get('events') || [];
+async function renderEvents() {
+  const { data: events } = await db.from('events').select('*').order('date', { ascending: true });
   const list = document.getElementById('all-events-list');
   if (!list) return;
-  list.innerHTML = events.length
+  list.innerHTML = events && events.length
     ? events.map(e => eventCardHTML(e)).join('')
     : '<div class="empty-state"><div class="empty-state-icon">📅</div>No upcoming events yet.</div>';
+
+  // Show add event button for admins
+  if (currentProfile?.is_admin) {
+    document.getElementById('admin-add-event-btn').style.display = 'block';
+  }
+}
+
+function showAddEventModal() {
+  openModal('modal-add-event');
+}
+
+async function submitEvent() {
+  const title = document.getElementById('ev-title').value.trim();
+  const date = document.getElementById('ev-date').value;
+  const time = document.getElementById('ev-time').value.trim();
+  const location = document.getElementById('ev-location').value.trim();
+  const distance = document.getElementById('ev-distance').value.trim();
+  if (!title || !date || !time || !location || !distance) {
+    alert('Please fill in all fields.'); return;
+  }
+  const { error } = await db.from('events').insert({ title, date, time, location, distance, going: 0 });
+  if (error) { alert('Error adding event: ' + error.message); return; }
+  closeModal();
+  await renderEvents();
+  await renderHome();
+  showScreen('events');
 }
 
 // --- SPOTLIGHT ---
-function renderSpotlight() {
-  const posts = DB.get('spotlight') || [];
-  const cheered = DB.get('cheered') || [];
+async function renderSpotlight() {
+  const isAdmin = currentProfile?.is_admin;
+  const query = db.from('spotlight').select('*').order('created_at', { ascending: false });
+  if (!isAdmin) query.eq('approved', true);
+  const { data: posts } = await query;
   const list = document.getElementById('spotlight-list');
   if (!list) return;
-  list.innerHTML = posts.length ? posts.map(p => `
+
+  if (!posts || posts.length === 0) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🌟</div>No achievements yet. Be the first to share!</div>';
+    return;
+  }
+
+  list.innerHTML = posts.map(p => `
     <div class="spotlight-card" id="sp-${p.id}">
       <div class="spotlight-header">
         <div class="sp-avatar">${p.initials}</div>
         <div>
           <div class="sp-name">${p.name}</div>
-          <div class="sp-time">${p.time}</div>
+          <div class="sp-time">${formatTime(p.created_at)}</div>
         </div>
         <div class="sp-badge">${p.badge}</div>
+        ${isAdmin && !p.approved ? `<button onclick="approvePost(${p.id})" style="margin-left:8px;background:#e8f542;color:#0c0c0c;border:none;border-radius:12px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer;font-family:'Barlow Condensed',sans-serif;letter-spacing:1px;">APPROVE</button>` : ''}
       </div>
-      <div class="sp-content">${p.text}</div>
+      ${!p.approved ? '<div style="font-size:11px;color:#666;margin-bottom:8px;font-style:italic;">Pending approval...</div>' : ''}
+      <div class="sp-content">${p.content}</div>
       <div class="sp-achievement">
         <div class="sp-ach-icon">${p.icon}</div>
         <div>
@@ -185,32 +238,28 @@ function renderSpotlight() {
         </div>
       </div>
       <div class="sp-actions">
-        <button class="sp-action-btn cheer ${cheered.includes(p.id) ? 'cheered' : ''}"
-          onclick="cheerPost(${p.id}, this)">
+        <button class="sp-action-btn cheer" onclick="cheerPost(${p.id}, this)">
           🎉 Cheer · <span class="cheer-count">${p.cheers}</span>
         </button>
-        <button class="sp-action-btn">💬 Comment</button>
         <div class="sp-count">${p.comments} comments</div>
       </div>
-    </div>`).join('')
-    : '<div class="empty-state"><div class="empty-state-icon">🌟</div>No achievements yet. Be the first to share!</div>';
+    </div>`).join('');
 }
 
-function cheerPost(id, btn) {
+async function approvePost(id) {
+  await db.from('spotlight').update({ approved: true }).eq('id', id);
+  await renderSpotlight();
+}
+
+async function cheerPost(id, btn) {
   if (!requireAuth()) return;
-  const cheered = DB.get('cheered') || [];
-  if (cheered.includes(id)) return;
-  cheered.push(id);
-  DB.set('cheered', cheered);
-  const posts = DB.get('spotlight') || [];
-  const post = posts.find(p => p.id === id);
-  if (post) {
-    post.cheers++;
-    DB.set('spotlight', posts);
-    btn.querySelector('.cheer-count').textContent = post.cheers;
-    btn.style.background = '#222a10';
-    btn.style.borderColor = '#3a4a10';
-  }
+  const { data: post } = await db.from('spotlight').select('cheers').eq('id', id).single();
+  if (!post) return;
+  await db.from('spotlight').update({ cheers: post.cheers + 1 }).eq('id', id);
+  btn.querySelector('.cheer-count').textContent = post.cheers + 1;
+  btn.style.background = '#222a10';
+  btn.style.borderColor = '#3a4a10';
+  btn.onclick = null;
 }
 
 function showPostForm() {
@@ -218,44 +267,40 @@ function showPostForm() {
   openModal('modal-post');
 }
 
-function submitPost() {
+async function submitPost() {
   const type = document.getElementById('post-type').value;
   const value = document.getElementById('post-value').value.trim();
-  const text = document.getElementById('post-text').value.trim();
-  if (!value || !text) { alert('Please fill in all fields.'); return; }
+  const content = document.getElementById('post-text').value.trim();
+  if (!value || !content) { alert('Please fill in all fields.'); return; }
   const badgeMap = { pb: 'New PB', race: '1st Race', milestone: 'Milestone' };
   const iconMap = { pb: '⚡', race: '🏅', milestone: '🌑' };
   const labelMap = { pb: 'New Personal Best', race: 'Race Completion', milestone: 'Distance Milestone' };
-  const posts = DB.get('spotlight') || [];
-  const user = DB.get('user');
-  const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
-  posts.unshift({
-    id: Date.now(),
-    name: user.name,
-    initials,
-    type,
+  const name = currentProfile?.name || currentUser.email.split('@')[0];
+  const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  const { error } = await db.from('spotlight').insert({
+    user_id: currentUser.id,
+    name, initials,
     badge: badgeMap[type],
-    value,
+    value, content,
     label: labelMap[type],
     icon: iconMap[type],
-    text,
     cheers: 0,
     comments: 0,
-    time: 'Just now'
+    approved: false
   });
-  DB.set('spotlight', posts);
+  if (error) { alert('Error: ' + error.message); return; }
   closeModal();
-  renderSpotlight();
+  await renderSpotlight();
   showScreen('spotlight');
+  alert('Your achievement has been submitted and will appear once approved by an admin!');
 }
 
 // --- CHAT ---
 function renderChat() {
   const chats = [
-    { initials: 'EC', name: 'Eclipse Group Chat', preview: 'Welcome to Eclipse Run Club! 🖤', time: 'now', unread: 3, main: true },
-    { initials: 'SR', name: 'Sarah R.', preview: 'Are we meeting at the usual spot?', time: '2m', unread: 0 },
-    { initials: 'DM', name: 'Dan M.', preview: 'That 10K route was incredible', time: '1h', unread: 0 },
-    { initials: 'AK', name: 'Aisha K.', preview: 'Thanks for the pace advice!', time: '3h', unread: 0 },
+    { initials: 'EC', name: 'Eclipse Group Chat', preview: 'Welcome to Eclipse Run Club! 🖤', time: 'now', unread: 1, main: true },
+    { initials: 'SR', name: 'Sarah R.', preview: 'See you Saturday!', time: '2m', unread: 0 },
+    { initials: 'DM', name: 'Dan M.', preview: 'That last run was brilliant', time: '1h', unread: 0 },
   ];
   const list = document.getElementById('chat-list');
   if (!list) return;
@@ -275,71 +320,63 @@ function renderChat() {
 
 function openChat(name) {
   if (!requireAuth()) return;
-  alert(`Opening chat with ${name} — full messaging coming soon!`);
+  alert(`Full messaging coming soon! For now use the Eclipse Group Chat on WhatsApp.`);
 }
 
 // --- PROFILE ---
 function renderProfile() {
-  const user = DB.get('user');
-  if (user) {
-    const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
+  if (currentProfile) {
+    const initials = currentProfile.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
     document.getElementById('profile-initials').textContent = initials;
-    document.getElementById('profile-name').textContent = user.name;
-    document.getElementById('profile-tag').textContent = 'Eclipse Member · Since 2026';
-    document.getElementById('p-runs').textContent = user.runs || 0;
-    document.getElementById('p-km').textContent = user.km || 0;
-    document.getElementById('p-events').textContent = user.events || 0;
+    document.getElementById('profile-name').textContent = currentProfile.name;
+    document.getElementById('profile-tag').textContent = 'Eclipse Member';
+    document.getElementById('p-runs').textContent = currentProfile.runs || 0;
+    document.getElementById('p-km').textContent = currentProfile.km || 0;
+    document.getElementById('p-events').textContent = currentProfile.events_attended || 0;
+    if (currentProfile.is_admin) {
+      document.getElementById('admin-badge').style.display = 'block';
+      document.getElementById('admin-add-event-btn').style.display = 'block';
+    }
   } else {
     document.getElementById('profile-initials').textContent = '?';
     document.getElementById('profile-name').textContent = 'Sign In';
     document.getElementById('profile-tag').textContent = 'Join Eclipse';
+    document.getElementById('admin-badge').style.display = 'none';
   }
 }
 
-function editProfile() {
-  if (!requireAuth()) return;
-  alert('Profile editing coming soon!');
-}
-
-function signOut() {
+async function signOut() {
   if (confirm('Are you sure you want to sign out?')) {
-    DB.set('user', null);
+    await db.auth.signOut();
     currentUser = null;
+    currentProfile = null;
     renderProfile();
     showScreen('home');
-    setTimeout(() => openAuthModal(), 400);
   }
 }
 
 // --- NOTIFICATIONS ---
 function renderNotifications() {
-  const notifs = DB.get('notifications') || [];
+  const notifs = [
+    { icon: '🏃', text: 'Welcome to Eclipse Run Club! Your next run is coming up.', time: 'Just now' },
+    { icon: '📅', text: 'New event added — check the Events tab!', time: 'Today' },
+  ];
   const list = document.getElementById('notifications-list');
   if (!list) return;
-  list.innerHTML = notifs.length ? notifs.map(n => `
+  list.innerHTML = notifs.map(n => `
     <div class="notif-item">
       <div class="notif-icon">${n.icon}</div>
       <div>
         <div class="notif-text">${n.text}</div>
         <div class="notif-time">${n.time}</div>
       </div>
-    </div>`).join('')
-    : '<div class="empty-state"><div class="empty-state-icon">🔔</div>No notifications yet.</div>';
-}
-
-function updateNotifDot() {
-  const dot = document.getElementById('notif-dot');
-  const notifs = DB.get('notifications') || [];
-  if (notifs.length > 0) dot.classList.add('active');
-}
-
-function markNotifsRead() {
-  document.getElementById('notif-dot').classList.remove('active');
+    </div>`).join('');
+  document.getElementById('notif-dot').classList.add('active');
 }
 
 // --- AUTH ---
 function requireAuth() {
-  if (DB.get('user')) return true;
+  if (currentUser) return true;
   openAuthModal();
   return false;
 }
@@ -347,7 +384,9 @@ function requireAuth() {
 function openAuthModal() {
   authMode = 'signin';
   document.getElementById('auth-title').textContent = 'Sign In';
-  document.getElementById('auth-name').style.display = 'none';
+  document.getElementById('auth-name-wrap').style.display = 'none';
+  document.getElementById('auth-submit-btn').textContent = 'Sign In';
+  document.getElementById('auth-error').style.display = 'none';
   openModal('modal-auth');
 }
 
@@ -355,31 +394,40 @@ function toggleAuthMode() {
   if (authMode === 'signin') {
     authMode = 'signup';
     document.getElementById('auth-title').textContent = 'Create Account';
-    document.getElementById('auth-name').style.display = 'block';
-    document.querySelector('#modal-auth .modal-btn').textContent = 'Create Account';
-    document.querySelector('#modal-auth span:last-child').textContent = 'Sign In';
+    document.getElementById('auth-name-wrap').style.display = 'block';
+    document.getElementById('auth-submit-btn').textContent = 'Create Account';
   } else {
     authMode = 'signin';
     document.getElementById('auth-title').textContent = 'Sign In';
-    document.getElementById('auth-name').style.display = 'none';
-    document.querySelector('#modal-auth .modal-btn').textContent = 'Sign In';
-    document.querySelector('#modal-auth span:last-child').textContent = 'Sign Up';
+    document.getElementById('auth-name-wrap').style.display = 'none';
+    document.getElementById('auth-submit-btn').textContent = 'Sign In';
   }
 }
 
-function submitAuth() {
+async function submitAuth() {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value.trim();
   const name = document.getElementById('auth-name').value.trim();
-  if (!email || !password) { alert('Please enter your email and password.'); return; }
-  if (authMode === 'signup' && !name) { alert('Please enter your name.'); return; }
-  const user = authMode === 'signup'
-    ? { name, email, runs: 0, km: 0, events: 0 }
-    : { name: email.split('@')[0], email, runs: 0, km: 0, events: 0 };
-  DB.set('user', user);
-  currentUser = user;
-  closeModal();
-  renderProfile();
+  const errEl = document.getElementById('auth-error');
+  errEl.style.display = 'none';
+  if (!email || !password) { showAuthError('Please enter your email and password.'); return; }
+  if (authMode === 'signup') {
+    if (!name) { showAuthError('Please enter your name.'); return; }
+    const { error } = await db.auth.signUp({ email, password, options: { data: { name } } });
+    if (error) { showAuthError(error.message); return; }
+    closeModal();
+    alert('Account created! Please check your email to confirm your account, then sign in.');
+  } else {
+    const { error } = await db.auth.signInWithPassword({ email, password });
+    if (error) { showAuthError('Incorrect email or password.'); return; }
+    closeModal();
+  }
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg;
+  el.style.display = 'block';
 }
 
 // --- MODALS ---
@@ -391,4 +439,16 @@ function openModal(id) {
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('active');
   document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
+}
+
+// --- HELPERS ---
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
